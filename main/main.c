@@ -1,5 +1,6 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/event_groups.h"
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_mac.h"
@@ -42,27 +43,34 @@ static int64_t get_unix_ms(void)
 }
 
 /* ── NTP синхронизация ───────────────────────────────────────── */
+static EventGroupHandle_t s_ntp_event_group;
+#define NTP_SYNCED_BIT BIT0
+
+static void ntp_sync_callback(struct timeval *tv)
+{
+    xEventGroupSetBits(s_ntp_event_group, NTP_SYNCED_BIT);
+}
+
 static bool ntp_sync(void)
 {
     ESP_LOGI(TAG, "NTP sync from %s...", NTP_SERVER);
 
+    s_ntp_event_group = xEventGroupCreate();
+
     esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
     esp_sntp_setservername(0, NTP_SERVER);
+    sntp_set_time_sync_notification_cb(ntp_sync_callback);
     esp_sntp_init();
 
     /* Ждём синхронизации до 30 секунд */
-    int retry = 0;
-    while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && retry < 60) {
-        vTaskDelay(pdMS_TO_TICKS(500));
-        retry++;
-        ESP_LOGI(TAG, "NTP waiting... %d/60", retry);
-    }
-
-    bool synced = (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED);
+    EventBits_t bits = xEventGroupWaitBits(s_ntp_event_group, NTP_SYNCED_BIT,
+                                           pdFALSE, pdTRUE,
+                                           pdMS_TO_TICKS(30000));
     esp_sntp_stop();
+    vEventGroupDelete(s_ntp_event_group);
 
-    if (!synced) {
-        ESP_LOGW(TAG, "NTP sync failed after %d retries", retry);
+    if (!(bits & NTP_SYNCED_BIT)) {
+        ESP_LOGW(TAG, "NTP sync timeout");
         return false;
     }
 
