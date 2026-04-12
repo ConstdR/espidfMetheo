@@ -93,9 +93,8 @@ static void publish(const char *topic, const char *payload)
 
 void mqttudp_send_sensor_data(const sensor_data_t *data, const char *device_id)
 {
-    /* Топик содержит device_id: weather/<id> */
-    char topic[48];
-    snprintf(topic, sizeof(topic), "weather/%s", device_id);
+    /* Топик фиксированный — id устройства уже в payload */
+    const char *topic = "weather";
 
     /* Payload — JSON с данными и timestamp (мс с момента загрузки) */
     char payload[160];
