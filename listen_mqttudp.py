@@ -59,7 +59,7 @@ def main():
                       f"H={j['humidity']}%  "
                       f"P={j['pressure']}hPa  "
                       f"id={dev_id}  "
-                      f"ts={ts_val}")
+                      f"ts={datetime.datetime.fromtimestamp(ts_val/1000).strftime('%H:%M:%S') if ts_val else ts_val}")
         except Exception:
             pretty = payload
 

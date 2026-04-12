@@ -1,7 +1,6 @@
 #include "mqttudp_client.h"
 
 #include "esp_log.h"
-#include "esp_rtc_time.h"
 #include "lwip/sockets.h"
 #include "lwip/inet.h"
 #include <string.h>
@@ -91,20 +90,22 @@ static void publish(const char *topic, const char *payload)
     }
 }
 
-void mqttudp_send_sensor_data(const sensor_data_t *data, const char *device_id)
+void mqttudp_send_sensor_data(const sensor_data_t *data,
+                               const char *device_id,
+                               int64_t unix_ms)
 {
     /* Топик фиксированный — id устройства уже в payload */
     const char *topic = "weather";
 
-    /* Payload — JSON с данными и timestamp (мс с момента загрузки) */
+    /* Payload — JSON с данными и Unix timestamp в мс */
     char payload[160];
     snprintf(payload, sizeof(payload),
-        "{\"id\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f,\"pressure\":%.1f,\"ts\":%llu}",
+        "{\"id\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f,\"pressure\":%.1f,\"ts\":%lld}",
         device_id,
         data->temperature,
         data->humidity,
         data->pressure,
-        (unsigned long long)(esp_rtc_get_time_us() / 1000ULL));  // мкс → мс
+        (long long)unix_ms);
 
     publish(topic, payload);
 }

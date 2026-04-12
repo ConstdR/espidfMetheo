@@ -3,7 +3,10 @@
 #include "esp_log.h"
 #include "esp_sleep.h"
 #include "esp_mac.h"
+#include "esp_rtc_time.h"
+#include "esp_sntp.h"
 #include "driver/gpio.h"
+#include <time.h>
 
 #include "wifi.h"
 #include "sensor.h"
@@ -18,7 +21,69 @@ static const char *TAG = "main";
 #define SLEEP_MINUTES    CONFIG_SLEEP_MINUTES
 #define SLEEP_US         (SLEEP_MINUTES * 60ULL * 1000000ULL)
 
-/* Получить уникальный ID устройства из MAC адреса (как в MicroPython) */
+/* NTP синхронизация раз в сутки */
+#define NTP_SERVER       "pool.ntp.org"
+#define NTP_SYNC_SECS    (24 * 60 * 60)  // 24 часа в секундах
+
+/* ── RTC memory — сохраняется при deep sleep ─────────────────── */
+RTC_DATA_ATTR static int64_t  s_saved_unix_ms = 0;   // Unix время в мс на момент синхронизации
+RTC_DATA_ATTR static uint64_t s_saved_rtc_us  = 0;   // RTC счётчик на момент синхронизации
+RTC_DATA_ATTR static int64_t  s_last_sync_unix = 0;  // Unix время последней NTP синхронизации
+
+/* ── Текущее Unix время в мс ─────────────────────────────────── */
+static int64_t get_unix_ms(void)
+{
+    if (s_saved_unix_ms == 0) {
+        return 0;  // не синхронизировано
+    }
+    uint64_t rtc_now = esp_rtc_get_time_us();
+    int64_t elapsed_ms = (int64_t)((rtc_now - s_saved_rtc_us) / 1000ULL);
+    return s_saved_unix_ms + elapsed_ms;
+}
+
+/* ── NTP синхронизация ───────────────────────────────────────── */
+static bool ntp_sync(void)
+{
+    ESP_LOGI(TAG, "NTP sync from %s...", NTP_SERVER);
+
+    esp_sntp_setoperatingmode(ESP_SNTP_OPMODE_POLL);
+    esp_sntp_setservername(0, NTP_SERVER);
+    esp_sntp_init();
+
+    /* Ждём синхронизации до 10 секунд */
+    int retry = 0;
+    while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && retry < 20) {
+        vTaskDelay(pdMS_TO_TICKS(500));
+        retry++;
+    }
+    esp_sntp_stop();
+
+    if (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
+        ESP_LOGW(TAG, "NTP sync failed");
+        return false;
+    }
+
+    /* Сохраняем в RTC memory */
+    struct timeval tv;
+    gettimeofday(&tv, NULL);
+    s_saved_unix_ms  = (int64_t)tv.tv_sec * 1000LL + tv.tv_usec / 1000LL;
+    s_saved_rtc_us   = esp_rtc_get_time_us();
+    s_last_sync_unix = (int64_t)tv.tv_sec;
+
+    ESP_LOGI(TAG, "NTP synced: unix=%lld", (long long)tv.tv_sec);
+    return true;
+}
+
+/* ── Нужна ли NTP синхронизация? ────────────────────────────── */
+static bool need_ntp_sync(void)
+{
+    if (s_saved_unix_ms == 0) return true;  // первый boot
+
+    int64_t now_unix = get_unix_ms() / 1000LL;
+    return (now_unix - s_last_sync_unix) >= NTP_SYNC_SECS;
+}
+
+/* ── Device ID из MAC адреса ─────────────────────────────────── */
 static void get_device_id(char *buf, size_t buf_size)
 {
     uint8_t mac[6];
@@ -28,7 +93,7 @@ static void get_device_id(char *buf, size_t buf_size)
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 }
 
-/* ── Точка входа ────────────────────────────────────────────── */
+/* ── Точка входа ─────────────────────────────────────────────── */
 void app_main(void)
 {
     uint32_t causes = esp_sleep_get_wakeup_causes();
@@ -39,7 +104,7 @@ void app_main(void)
     }
 
     /* Device ID */
-    char device_id[13];  // 6 байт × 2 символа + '\0'
+    char device_id[13];
     get_device_id(device_id, sizeof(device_id));
     ESP_LOGI(TAG, "Device ID: %s", device_id);
 
@@ -58,8 +123,15 @@ void app_main(void)
     wifi_init_sta(WIFI_SSID, WIFI_PASSWORD);
     wifi_wait_connected();
 
-    /* 2. Сенсор BME280 */
-    /* Подавляем ожидаемое сообщение от i2c_bus при первой инициализации */
+    /* 2. NTP — только если нужно (первый boot или прошло 24 часа) */
+    if (need_ntp_sync()) {
+        ntp_sync();
+    } else {
+        ESP_LOGI(TAG, "NTP skip, last sync %lld sec ago",
+                 (long long)(get_unix_ms() / 1000LL - s_last_sync_unix));
+    }
+
+    /* 3. Сенсор BME280 */
     esp_log_level_set("i2c.master", ESP_LOG_NONE);
     if (!sensor_init()) {
         ESP_LOGE(TAG, "BME280 init failed! Going to sleep anyway.");
@@ -67,18 +139,17 @@ void app_main(void)
     }
     esp_log_level_set("i2c.master", ESP_LOG_ERROR);
 
-    /* Ждём первое измерение в normal mode (standby 0.5ms + время замера) */
     vTaskDelay(pdMS_TO_TICKS(500));
 
-    /* 3. MQTT-UDP */
+    /* 4. MQTT-UDP */
     mqttudp_client_init();
 
-    /* 4. Одно измерение и отправка */
+    /* 5. Измерение и отправка */
     {
         sensor_data_t data;
         gpio_set_level(LED_GPIO, 1);
         if (sensor_read(&data)) {
-            mqttudp_send_sensor_data(&data, device_id);
+            mqttudp_send_sensor_data(&data, device_id, get_unix_ms());
         } else {
             ESP_LOGW(TAG, "Sensor read failed");
         }
