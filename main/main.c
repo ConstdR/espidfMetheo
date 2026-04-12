@@ -50,16 +50,19 @@ static bool ntp_sync(void)
     esp_sntp_setservername(0, NTP_SERVER);
     esp_sntp_init();
 
-    /* Ждём синхронизации до 10 секунд */
+    /* Ждём синхронизации до 30 секунд */
     int retry = 0;
-    while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && retry < 20) {
+    while (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED && retry < 60) {
         vTaskDelay(pdMS_TO_TICKS(500));
         retry++;
+        ESP_LOGI(TAG, "NTP waiting... %d/60", retry);
     }
+
+    bool synced = (sntp_get_sync_status() == SNTP_SYNC_STATUS_COMPLETED);
     esp_sntp_stop();
 
-    if (sntp_get_sync_status() != SNTP_SYNC_STATUS_COMPLETED) {
-        ESP_LOGW(TAG, "NTP sync failed");
+    if (!synced) {
+        ESP_LOGW(TAG, "NTP sync failed after %d retries", retry);
         return false;
     }
 
