@@ -1,4 +1,5 @@
 # Weather Station — ESP32 + BME280 + MQTT-UDP
+# code moved to https://github.com/ConstdR/esp32Metheo/tree/master/espidf
 
 Проект метеостанции на ESP32 с сенсором BME280. Данные отправляются
 в локальную сеть через **MQTT-UDP** (UDP broadcast, порт 1883) — без
