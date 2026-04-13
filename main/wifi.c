@@ -75,6 +75,7 @@ void wifi_init_sta(const char *ssid, const char *password)
     esp_wifi_set_mode(WIFI_MODE_STA);
     esp_wifi_set_config(WIFI_IF_STA, &wifi_config);
     esp_wifi_start();
+    esp_wifi_set_max_tx_power(44);  // ~11 dBm вместо 20 dBm — меньше тока
 
     ESP_LOGI(TAG, "Connecting to \"%s\"...", ssid);
 }
