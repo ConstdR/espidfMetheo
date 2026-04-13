@@ -6,11 +6,12 @@
 #include <string.h>
 #include <stdio.h>
 #include <errno.h>
+#include <time.h>
 
 static const char *TAG = "mqttudp";
 
 /* ── Настройки ───────────────────────────────────────────────── */
-#define MQTTUDP_PORT       1885
+#define MQTTUDP_PORT       1883
 #define MQTTUDP_BROADCAST  "255.255.255.255"
 
 /*
@@ -94,18 +95,26 @@ void mqttudp_send_sensor_data(const sensor_data_t *data,
                                const char *device_id,
                                int64_t unix_ms)
 {
-    /* Топик фиксированный — id устройства уже в payload */
-    const char *topic = "weather";
+    /* Топик weather/<device_id> — как ожидает сервер */
+    char topic[48];
+    snprintf(topic, sizeof(topic), "weather/%s", device_id);
 
-    /* Payload — JSON с данными и Unix timestamp в мс */
-    char payload[160];
+    /* ts — datetime строка UTC как ожидает сервер */
+    char ts_str[32] = "1970-01-01T00:00:00";
+    if (unix_ms > 0) {
+        time_t t = (time_t)(unix_ms / 1000);
+        struct tm *tm_info = gmtime(&t);
+        strftime(ts_str, sizeof(ts_str), "%Y-%m-%dT%H:%M:%S", tm_info);
+    }
+
+    /* Поля t/h/p как ожидает listenudp.py */
+    char payload[128];
     snprintf(payload, sizeof(payload),
-        "{\"id\":\"%s\",\"temperature\":%.1f,\"humidity\":%.1f,\"pressure\":%.1f,\"ts\":%lld}",
-        device_id,
+        "{\"ts\":\"%s\",\"t\":%.1f,\"h\":%.1f,\"p\":%.1f}",
+        ts_str,
         data->temperature,
         data->humidity,
-        data->pressure,
-        (long long)unix_ms);
+        data->pressure);
 
     publish(topic, payload);
 }

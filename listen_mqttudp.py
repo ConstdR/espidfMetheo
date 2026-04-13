@@ -37,7 +37,8 @@ def main():
     print(f"{'Time':<12}  {'From':<16}  {'Topic':<32}  Payload")
     print("-" * 80)
 
-    last_seen = {}  # device_id → последний ts для дедупликации
+    # Дедупликация по (topic, ts)
+    last_seen = {}  # topic → последний ts
 
     while True:
         raw, addr = sock.recvfrom(512)
@@ -46,20 +47,20 @@ def main():
             continue
         topic, payload = result
 
-        # Дедупликация по (id, timestamp)
         try:
             j = json.loads(payload)
-            dev_id = j.get("id")
             ts_val = j.get("ts")
-            if dev_id and ts_val is not None:
-                if last_seen.get(dev_id) == ts_val:
-                    continue  # дубликат — пропускаем
-                last_seen[dev_id] = ts_val
-            pretty = (f"T={j['temperature']}°C  "
-                      f"H={j['humidity']}%  "
-                      f"P={j['pressure']}hPa  "
-                      f"id={dev_id}  "
-                      f"ts={datetime.datetime.fromtimestamp(ts_val/1000).strftime('%H:%M:%S') if ts_val else ts_val}")
+
+            # Дедупликация по (topic, ts)
+            if ts_val is not None:
+                if last_seen.get(topic) == ts_val:
+                    continue
+                last_seen[topic] = ts_val
+
+            pretty = (f"T={j['t']}°C  "
+                      f"H={j['h']}%  "
+                      f"P={j['p']}hPa  "
+                      f"ts={ts_val}")
         except Exception:
             pretty = payload
 
